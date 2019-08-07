@@ -64,6 +64,7 @@ use Symfony\Component\Form\FormTypeExtensionInterface;
 use Symfony\Component\Form\FormTypeGuesserInterface;
 use Symfony\Component\Form\FormTypeInterface;
 use Symfony\Component\HttpClient\ScopingHttpClient;
+use Symfony\Component\HttpClient\TraceableHttpClient;
 use Symfony\Component\HttpKernel\CacheClearer\CacheClearerInterface;
 use Symfony\Component\HttpKernel\CacheWarmer\CacheWarmerInterface;
 use Symfony\Component\HttpKernel\Controller\ArgumentValueResolverInterface;
@@ -149,6 +150,7 @@ class FrameworkExtension extends Extension
     private $validatorConfigEnabled = false;
     private $messengerConfigEnabled = false;
     private $mailerConfigEnabled = false;
+    private $httpClientConfigEnabled = false;
 
     /**
      * Responds to the app.config configuration parameter.
@@ -340,7 +342,7 @@ class FrameworkExtension extends Extension
             $this->registerLockConfiguration($config['lock'], $container, $loader);
         }
 
-        if ($this->isConfigEnabled($container, $config['http_client'])) {
+        if ($this->httpClientConfigEnabled = $this->isConfigEnabled($container, $config['http_client'])) {
             $this->registerHttpClientConfiguration($config['http_client'], $container, $loader);
         }
 
@@ -556,6 +558,10 @@ class FrameworkExtension extends Extension
 
         if ($this->mailerConfigEnabled) {
             $loader->load('mailer_debug.xml');
+        }
+
+        if ($this->httpClientConfigEnabled) {
+            $loader->load('http_client_debug.xml');
         }
 
         $container->setParameter('profiler_listener.only_exceptions', $config['only_exceptions']);
@@ -961,7 +967,9 @@ class FrameworkExtension extends Extension
         }
 
         if (!empty($config['loaders'])) {
-            $loaders = array_map(function ($loader) { return new Reference($loader); }, $config['loaders']);
+            $loaders = array_map(function ($loader) {
+                return new Reference($loader);
+            }, $config['loaders']);
 
             // Use a delegation unless only a single loader was registered
             if (1 === \count($loaders)) {
@@ -983,7 +991,9 @@ class FrameworkExtension extends Extension
         }
 
         $container->setParameter('templating.engines', $config['engines']);
-        $engines = array_map(function ($engine) { return new Reference('templating.engine.'.$engine); }, $config['engines']);
+        $engines = array_map(function ($engine) {
+            return new Reference('templating.engine.'.$engine);
+        }, $config['engines']);
 
         // Use a delegation unless only a single engine was registered
         if (1 === \count($engines)) {
@@ -1924,6 +1934,11 @@ class FrameworkExtension extends Extension
     {
         $loader->load('http_client.xml');
 
+        $collectorDefinition = $container->getDefinition('data_collector.http_client');
+
+        if ($debug = $container->getParameter('kernel.debug')) {
+        }
+
         $container->getDefinition('http_client')->setArguments([$config['default_options'] ?? [], $config['max_host_connections'] ?? 6]);
 
         if (!$hasPsr18 = interface_exists(ClientInterface::class)) {
@@ -1950,6 +1965,21 @@ class FrameworkExtension extends Extension
             } else {
                 $container->register($name, ScopingHttpClient::class)
                     ->setArguments([new Reference('http_client'), [$scope => $scopeConfig], $scope]);
+            }
+
+            if ($debug) {
+                $innerId = '.'.$name.'.inner';
+
+                $container->setDefinition(
+                    $innerId,
+                    $container->getDefinition($name)
+                    ->replaceArgument(0, new Reference('debug.http_client.inner'))
+                );
+
+                $container->register($name, TraceableHttpClient::class)
+                    ->setArguments([new Reference($innerId)]);
+
+                $collectorDefinition->addMethodCall('addClient', [$name, new Reference($name)]);
             }
 
             $container->registerAliasForArgument($name, HttpClientInterface::class);
